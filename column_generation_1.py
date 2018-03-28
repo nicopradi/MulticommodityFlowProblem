@@ -4,7 +4,7 @@
 from __future__ import print_function
 
 import sys
-import os
+import time
 
 import cplex
 from cplex.exceptions import CplexSolverError
@@ -13,6 +13,8 @@ import openpyxl
 
 
 # ------------- DATA ------------- (put them in another file)
+s_time_loading_data = time.time()
+
 nArcs = 48 # Number of arcs
 nStations = 20 # Number of stations
 nCommodities = 202 # Number of commodity
@@ -134,7 +136,7 @@ commodities = [
 	[5, 1, 98],  [5, 3, 70],  [5, 4, 73] 
 ]
 
-scale_capacity = 2.5 # Variable used to scale up or down the capacity of the arcs (depending on their type)
+scale_capacity = 2.4 # Variable used to scale up or down the capacity of the arcs (depending on their type)
 capacity_by_type = [200,350,500,650] # Define a capacity value for each type of arcs
 capacity_by_type = [cap*scale_capacity for cap in capacity_by_type] # Scale them by a constant
 
@@ -307,7 +309,9 @@ def restricted_Master(pathsK):
     for i in range(nCommodities):
         for j in range(len(pathsK[i])):
             model.variables.add(obj = [pathsK[i][j][nArcs]*float(commodities[i][2])], lb = [0], #obj contains the coefficients of the decision variables in the objective function
-                                ub = [1], names = ['P(' + str(i) + ',' + str(j) + ')']) 
+                                ub = [1],
+                                types = [model.variables.type.continuous],                               
+                                names = ['P(' + str(i) + ',' + str(j) + ')']) 
 
     #Add constraints
             
@@ -344,9 +348,6 @@ def restricted_Master(pathsK):
         print("\n\n-----------RESTRICTED MASTER SOLUTION : -----------\n")
         model.solve()
         model.write('test.lp')
-    except CplexSolverError as e:
-        print("Exception raised during restricted master problem: " + e)
-    else:
         print("\n")
         print("Solution primal : ",model.solution.get_values())
         #If the try statement did well
@@ -368,6 +369,15 @@ def restricted_Master(pathsK):
             print("\nDual values y_K" + str(i+1) + " = "+ str(dualCommodities[i]))
         for i in range(len(dualArcs)):
             print("Dual values y_Arc" + str(i+1) + " = "+ str(dualArcs[i]))
+            
+    except CplexSolverError as e:
+        print("Exception raised during restricted master problem: ", e)
+        return [-1] * 4 # return -1 to indicate the infeasibility of restricted master problem
+    
+    if(model.solution.get_objective_value() > -1):
+        dual = model.solution.get_dual_values()
+        dualCommodities = dual[:nCommodities]
+        dualArcs = dual[nCommodities:]
     
     return model.solution.get_objective_value(), model.solution.get_values(), dualCommodities, dualArcs
 
@@ -458,26 +468,50 @@ def pricingProblem(dualCommodities, dualArcs): # For the moment, return the path
 
 # --- BEGIN HERE ---
 
-limit = 1.1 # Include all paths 'p' satisfying dist(p) < limit*shortest_path
+limit = 1 # Include all paths 'p' satisfying dist(p) < limit*shortest_path
 
-pathsK = getInitSolution_Dijkstra() # Get the initial set of variable through Dijkstra and "< limit*shortest_path " method
+def getInitSet():
+    pathsK = getInitSolution_Dijkstra()
+    return pathsK
+
+t_time_loading_data = time.time()
+
+pathsK = getInitSet() # Get the initial set of variable through Dijkstra and "< limit*shortest_path " method
 
 while True:
-    obj_Function, solution, dualCommodities, dualArcs = restricted_Master(pathsK) #Solve the restricted master problem
+    #Check if init set is feasible
+    while True:
+        print('VALUE LIMIT : ', limit)
+        obj_Function, solution, dualCommodities, dualArcs = restricted_Master(pathsK) #Solve the restricted master problem
+        if(obj_Function > -1):
+            break
+        limit += 0.05 # Increase by 5%
+        if(limit > 4):
+            sys.exit("NO FEASIBLE SOLUTION")
+        pathsK = getInitSet()
+        
+    t_time_init_set = time.time()
+    #Then iterate over pricing and restricted master problem
     reducedCost, newPath, forCommodity = pricingProblem(dualCommodities, dualArcs) #Solve the pricing problem
     
     if(reducedCost == 0):
+        t_time_solving = time.time()
         count = 0
         #Print final solution
+        print('SOLUTION : ',solution)
         for i in range(nCommodities):
             print()
             for j in range(len(pathsK[i])):
                 
                 indices = [k for k, x in enumerate(pathsK[i][j]) if x == 1] #Get the indices of the arcs contained in the current path
-                print("\t", solution[count]*commodities[i][2] ,"quantity of commodity n°", i ,"on path", node[commodities[i][0]][0],''
+                print("\t", solution[count]*commodities[i][2] ,"quantity of commodity n°", i+1 ,"on path", node[commodities[i][0]][0],''
                       + ' '.join([node[arc[k][1]-1][0] for k in indices]) + ". Length path : " + str(pathsK[i][j][nArcs]) )
                 count += 1
         print("\nTotal cost = " + str(obj_Function))
+        print("\nLoading data duration : ", t_time_loading_data - s_time_loading_data)
+        print("Finding initial set duration : ", t_time_init_set - t_time_loading_data)
+        print("Solving problem duration : ", t_time_solving - t_time_init_set)
+        
         
         break
     else:
