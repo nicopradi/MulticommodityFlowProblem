@@ -137,8 +137,11 @@ commodities = [
 ]
 
 scale_capacity = 2.4 # Variable used to scale up or down the capacity of the arcs (depending on their type)
-capacity_by_type = [200,350,500,650] # Define a capacity value for each type of arcs
-capacity_by_type = [cap*scale_capacity for cap in capacity_by_type] # Scale them by a constant
+capacity_arc = [200,350,500,650] # Define a capacity value for each type of arcs
+capacity_arc = [cap*scale_capacity for cap in capacity_arc] # Scale them by a constant
+
+capacity_node = [1000,2000,3000] # Define a capacity value for each type of nodes
+capacity_node = [cap*scale_capacity for cap in capacity_node] # Scale them by a constant
 
 cost = np.zeros((nStations, nStations, 2), dtype=int) # Represent the cost between each node with the corresponding arc_id, if equals 0 then no arc between the two nodes, 
 
@@ -261,15 +264,20 @@ def dual_of_Restrited(pathsK): # To obtain dual variables
 
     #Add variables
     for i in range(nCommodities):
-        model.variables.add(obj = [1], #obj contains the coefficients of the decision variables in the objective function
+        model.variables.add(obj = [1], lb = [-cplex.infinity], ub = [cplex.infinity],#obj contains the coefficients of the decision variables in the objective function
                             types = [model.variables.type.continuous],
-                            names = ['Y(' + str(i) + ')'])
+                            names = ['Y( K_' + str(i) + ')'])
 
     for i in range(nArcs):
-        model.variables.add(obj = [ capacity_by_type[arc[i][3]-1] ], #obj contains the coefficients of the decision variables in the objective function
-                            ub = [0],
+        model.variables.add(obj = [ capacity_arc[arc[i][3]-1] ], lb = [-cplex.infinity], ub = [0],#obj contains the coefficients of the decision variables in the objective function
                             types = [model.variables.type.continuous],
-                            names = ['Y(' + str(arc[i][0]-1) + str(arc[i][1]-1) + ')'])
+                            names = ['Y( A_' + str(arc[i][0]-1) + '_' + str(arc[i][1]-1) + ')'])
+        
+    for i in range(nStations):
+        model.variables.add(obj = [ capacity_node[node[i][2]-1] ], lb = [-cplex.infinity], ub = [0],#obj contains the coefficients of the decision variables in the objective function
+                            types = [model.variables.type.continuous],
+                            names = ['Y( ' + str(node[i][0])  + ')'])
+        
 
     #Add constraints
     for i in range(nCommodities):
@@ -283,10 +291,17 @@ def dual_of_Restrited(pathsK): # To obtain dual variables
                 if(pathsK[i][j][k] == 1):
                     ind.append(nCommodities+k)
                     val.append(commodities[i][2])
+            for k in range(nStations):
+                for l in range(nArcs):
+                    if(pathsK[i][j][l] == 1 and arc[l][1]-1 == k):
+                        ind.append(nCommodities+nArcs+k)
+                        val.append(commodities[i][2])
             row.append([ind, val])
             model.linear_constraints.add(lin_expr = row,
                                      senses = "L", #Equality constraint
                                      rhs = [ pathsK[i][j][nArcs]*float(commodities[i][2]) ] ) # Right Hand Side of the constraint
+
+
 
     try:
         print("\n\n-----------RESTRICTED DUAL SOLUTION : -----------\n")
@@ -295,7 +310,7 @@ def dual_of_Restrited(pathsK): # To obtain dual variables
     except CplexSolverError as e:
         print("Exception raised during restricted master problem: " + e)
 
-    return model.solution.get_values()[:nCommodities], model.solution.get_values()[nCommodities:]
+    return model.solution.get_values()[:nCommodities], model.solution.get_values()[nCommodities:nCommodities + nArcs], model.solution.get_values()[nArcs + nCommodities:]
     # Return the dual variables corresponding to the commodities and arcs constraints
 
 def restricted_Master(pathsK):
@@ -308,9 +323,8 @@ def restricted_Master(pathsK):
     #Create decision variables
     for i in range(nCommodities):
         for j in range(len(pathsK[i])):
-            model.variables.add(obj = [pathsK[i][j][nArcs]*float(commodities[i][2])], lb = [0], #obj contains the coefficients of the decision variables in the objective function
-                                ub = [1],
-                                types = [model.variables.type.continuous],                               
+            model.variables.add(obj = [pathsK[i][j][nArcs]*float(commodities[i][2])], lb = [0], ub = [1],#obj contains the coefficients of the decision variables in the objective function                               
+                                types = [model.variables.type.continuous],
                                 names = ['P(' + str(i) + ',' + str(j) + ')']) 
 
     #Add constraints
@@ -343,7 +357,26 @@ def restricted_Master(pathsK):
         row.append([ind, val])
         model.linear_constraints.add(lin_expr = row,
                                      senses = "L", # Less-than
-                                     rhs = [ capacity_by_type[arc[i][3]-1] ] ) #Capacity of the arc (-1 because type_id start at 1) 
+                                     rhs = [ capacity_arc[arc[i][3]-1] ] ) #Capacity of the arc (-1 because type_id start at 1)
+
+    #Node capacity constraints :
+    for i in range(nStations): #For each node
+        ind, val, row = [], [], []
+        count = 0
+        for j in range(nCommodities): #For each commodity paths, check each time a path contains the node (do not include starting node)
+            for k in range(len(pathsK[j])):
+                for l in range(nArcs):
+                    if(pathsK[j][k][l] == 1 and arc[l][1]-1 == i): # If it is the case, add the decision variable index to the constraint
+                        ind.append(count)
+                        val.append(commodities[j][2]) # With its coefficiant
+                count += 1
+        row.append([ind, val])
+        model.linear_constraints.add(lin_expr = row,
+                                     senses = "L", # Less-than
+                                     rhs = [ capacity_node[node[i][2]-1] ] ) #Capacity of the node (-1 because type_id start at 1)
+
+    
+
     try:
         print("\n\n-----------RESTRICTED MASTER SOLUTION : -----------\n")
         model.solve()
@@ -362,42 +395,51 @@ def restricted_Master(pathsK):
 
         dualCommodities = [] #Contain the dual variables corresponding to the flow conservation constraints in the primal
         dualArcs = [] #Contain the dual variables corresponding to the arc capacity constraints in the primal
+        dualStations = [] #Contain the dual variables corresponding to the node capacity constraints in the primal
         
-        dualCommodities, dualArcs = dual_of_Restrited(pathsK) # Compute them by solving the dual
+        dualCommodities, dualArcs, dualStations = dual_of_Restrited(pathsK) # Compute them by solving the dual
+        #Do it in another try except bloc
+ #       dual = model.solution.get_dual_values()
         
+#        dualCommodities = dual[:nCommodities]
+#        print("commot", dualCommodities)
+#        dualArcs = dual[nCommodities:nArcs+nCommodities]
+#        print("arc", dualArcs)
+#        dualStations = dual[nArcs+nCommodities:nArcs+nCommodities+nStations]
+#        print("station", dualStations)
+
+  
         for i in range(len(dualCommodities)):
             print("\nDual values y_K" + str(i+1) + " = "+ str(dualCommodities[i]))
         for i in range(len(dualArcs)):
             print("Dual values y_Arc" + str(i+1) + " = "+ str(dualArcs[i]))
+        for i in range(len(dualStations)):
+            print("Dual values y_Node" + str(i+1) + " = "+ str(dualStations[i]))
             
     except CplexSolverError as e:
         print("Exception raised during restricted master problem: ", e)
-        return [-1] * 4 # return -1 to indicate the infeasibility of restricted master problem
-    
-    if(model.solution.get_objective_value() > -1):
-        dual = model.solution.get_dual_values()
-        dualCommodities = dual[:nCommodities]
-        dualArcs = dual[nCommodities:]
-    
-    return model.solution.get_objective_value(), model.solution.get_values(), dualCommodities, dualArcs
+        return [-1] * 5 # return -1 to indicate the infeasibility of restricted master problem
 
-def pricingProblem(dualCommodities, dualArcs): # For the moment, return the path corresponding to the most violated constraint
+    return model.solution.get_objective_value(), model.solution.get_values(), dualCommodities, dualArcs, dualStations
+
+def pricingProblem(dualCommodities, dualArcs, dualStations): # For the moment, return the path corresponding to the most violated constraint
 
     # ------------- SOLVE THE PRICING PROBLEM-------------
     
     reducedCost = 0
     forCommodity = 0
-    bestPath = [] 
+    bestPath = []
     for i in range(nCommodities): #Solve the shortest path problem (with updated length) for each commodity
         model = cplex.Cplex()
         model.objective.set_sense(model.objective.sense.minimize) ## Say that we want to minimize the objective function
     
         #Create decision variables (array of nArcs size)
         for j in range(nArcs):
-            model.variables.add(obj = [commodities[i][2]*(arc[j][2] - dualArcs[j])], #obj contains the coefficients of the decision variables in the objective function
+            model.variables.add(obj = [commodities[i][2]*(arc[j][2] - dualArcs[j] - dualStations[ arc[j][1]-1 ] )], #obj contains the coefficients of the decision variables in the objective function
                                 lb = [0], ub = [1],
                                 types = [model.variables.type.integer],
                                 names = ['alpha ( ' + str(j) + ' )'])
+            
             
         model.objective.set_offset(-dualCommodities[i]) # Check if does what we want
 
@@ -437,8 +479,8 @@ def pricingProblem(dualCommodities, dualArcs): # For the moment, return the path
             row.append([ind, val])
             model.linear_constraints.add(lin_expr = row,
                                              senses = "E", #Equality constraint
-                                             rhs = rhs ) 
-
+                                             rhs = rhs )
+            
         try:
             print("\n\n-----------PRICING PROBLEM SOLUTION FOR COMMODITY n°", i ,": -----------\n")
             model.solve()
@@ -460,15 +502,14 @@ def pricingProblem(dualCommodities, dualArcs): # For the moment, return the path
             if(bestPath[i] == 1):
                 tempCost += arc[i][2]
         bestPath.append(tempCost) #Put the cost of the path at the bottom of its arcs description
-            
-        
+       
     return reducedCost, bestPath, forCommodity
         
             
 
 # --- BEGIN HERE ---
 
-limit = 1 # Include all paths 'p' satisfying dist(p) < limit*shortest_path
+limit = 1.6 # Include all paths 'p' satisfying dist(p) < limit*shortest_path
 
 def getInitSet():
     pathsK = getInitSolution_Dijkstra()
@@ -482,23 +523,20 @@ while True:
     #Check if init set is feasible
     while True:
         print('VALUE LIMIT : ', limit)
-        obj_Function, solution, dualCommodities, dualArcs = restricted_Master(pathsK) #Solve the restricted master problem
+        obj_Function, solution, dualCommodities, dualArcs, dualStations = restricted_Master(pathsK) #Solve the restricted master problem
         if(obj_Function > -1):
             break
-        limit += 0.05 # Increase by 5%
-        if(limit > 4):
-            sys.exit("NO FEASIBLE SOLUTION")
+        limit *= 1.05 # Increase by 5%
         pathsK = getInitSet()
         
     t_time_init_set = time.time()
     #Then iterate over pricing and restricted master problem
-    reducedCost, newPath, forCommodity = pricingProblem(dualCommodities, dualArcs) #Solve the pricing problem
+    reducedCost, newPath, forCommodity = pricingProblem(dualCommodities, dualArcs, dualStations) #Solve the pricing problem
     
-    if(reducedCost == 0):
+    if(round(reducedCost) == 0): # round to avoid minor computational error (10^-23 for 0)
         t_time_solving = time.time()
         count = 0
         #Print final solution
-        print('SOLUTION : ',solution)
         for i in range(nCommodities):
             print()
             for j in range(len(pathsK[i])):
@@ -511,6 +549,7 @@ while True:
         print("\nLoading data duration : ", t_time_loading_data - s_time_loading_data)
         print("Finding initial set duration : ", t_time_init_set - t_time_loading_data)
         print("Solving problem duration : ", t_time_solving - t_time_init_set)
+        print("limit : ", limit)
         
         
         break
