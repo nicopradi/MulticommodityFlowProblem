@@ -2,7 +2,7 @@ Multicommodity Flow Problem :
 
 Lastest version : Medium_instance/Updated_data/medium_instance.py (Take about 105sec to solve the problem entirely)
 
-The sub-algorithms used to find the initial feasible set are explained in each solver python file. Here is a summary :
+The sub-algorithms used to find the initial feasible set/solve the pricing problem  are explained in each solver python file. Here is a summary :
 
 Small_instance : 1/ Initial feasible set : For each commodity take all the paths with distance < (shortest_path_distance)*constant
 		         		   Make the constant grows until a feasible set is found
