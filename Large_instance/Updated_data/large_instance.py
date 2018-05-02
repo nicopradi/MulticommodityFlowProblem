@@ -43,25 +43,28 @@ def dijkstra(origin, cost, mostUsedNode, mostUsedArc):
                 
     labels = np.full((nStations), np.inf) # Contains the cost of the shortest paths from origin with initial value = infinite
     labels[origin] = 0
-    
+
     precedent_nodes = np.full((nStations), -1, dtype=int) # Contains the previous node of each node in the shortest paths
     precedent_arcs = np.full((nStations), -1, dtype=int) # Contains the previous arc of each node in the shortest paths
-    
+
     toTreat = np.array([origin]) # Nodes that need to be processed
 
     while True:
-        currentNode = toTreat[np.argmin(np.take(labels, toTreat))] # Pick the node with lowest shortest path distance from the set toTreat
+        currentIndex = np.argmin(np.take(labels, toTreat)) # Pick the index in toTreat with the lowest value
+        currentNode = toTreat[currentIndex] # Pick the node with lowest shortest path distance from the set toTreat
 
-        for i in np.nonzero(cost[currentNode, :, 0])[0]: # For all neighbors of currentNode
+    #   neighbor = cv2.findNonZero((cost[currentNode, :, 0]>0).astype(np.uint8)).ravel()[1::2]
+        neighbor = np.nonzero(cost[currentNode, :, 0]>0)[0]
+        for i in neighbor: # For all neighbors of currentNode
             if(labels[i] > labels[currentNode] + cost[currentNode, i, 0]): # If a better path if found
-                    
+
                 labels[i] = labels[currentNode] + cost[currentNode, i, 0] # Update the value
                 precedent_nodes[i] = currentNode # Get the node_id
                 precedent_arcs[i] = cost[currentNode, i, 1] # Get the arc_id
                 toTreat = np.append(toTreat, i) # As we found a better path to go to i, need to treat all the neighbors of i
 
-        toTreat = np.delete(toTreat,np.where(toTreat==currentNode)[0]) # Delete the node we just processed
-        
+        toTreat = np.delete(toTreat, currentIndex) # Delete the node we just processed
+
         if(toTreat.size == 0): # If there is no node left to treat, we are sure we obtained the best solution.
             break
 
